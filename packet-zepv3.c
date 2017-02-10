@@ -38,14 +38,14 @@
  *      ZEP v2 Header will have the following format (if type=2/Ack):
  *      |Preamble|Version| Type |Sequence#|
  *      |2 bytes |1 byte |1 byte| 4 bytes |
- *     
+ *
  *      ZEP v3 Header will have the following format (if type=1/Data):
  *      |Preamble|Version| Type |Channel ID|Device ID|CRC/LQI Mode|LQI Val|Relative Timestamp|Sequence#| Band |Channel page|Reserved|Length|
  *      |2 bytes |1 byte |1 byte|  1 byte  | 2 bytes |   1 byte   |1 byte |     8 bytes      | 4 bytes |1 byte|   1 byte   | 8 bytes|1 byte|
- * 
+ *
  *      ZEP v3 Header will have the following format (if type=2/Ack):
  *      |Preamble|Version| Type |Sequence#|
- *      |2 bytes |1 byte |1 byte| 4 bytes | 
+ *      |2 bytes |1 byte |1 byte| 4 bytes |
  *------------------------------------------------------------
  */
 //If source file is for dissector plugin, uncomment define below
@@ -64,6 +64,12 @@
 
 #include <epan/packet.h>
 #include <epan/prefs.h>
+#include <epan/proto_data.h>
+#include <epan/tvbuff.h>
+#include <epan/packet_info.h>
+#include <epan/proto.h>
+#include <epan/etypes.h>
+#include <epan/expert.h>
 
 #include <wsutil/nstime.h>
 
@@ -79,33 +85,35 @@ void proto_reg_handoff_zep(void);
 void proto_register_zep(void);
 
 /*  Initialize protocol and registered fields. */
-static int proto_zep = -1;
-static int hf_zep_version = -1;
-static int hf_zep_type = -1;
-static int hf_zep_channel_id = -1;
-static int hf_zep_device_id = -1;
-static int hf_zep_lqi_mode = -1;
-static int hf_zep_lqi = -1;
-static int hf_zep_timestamp = -1;
-static int hf_zep_timestamprel = -1;
-static int hf_zep_seqno = -1;
-static int hf_zep_ieee_length = -1;
-static int hf_zep_abstimestamp = -1;
-static int hf_zep_reltimestamp = -1;
-static int hf_zep_diftimestamp = -1; 
-static int hf_zep_refabstime = -1; 
+static gint proto_zep = -1;
+static gint hf_zep_id_string = -1;
+static gint hf_zep_version = -1;
+static gint hf_zep_type = -1;
+static gint hf_zep_channel_id = -1;
+static gint hf_zep_device_id = -1;
+static gint hf_zep_lqi_mode = -1;
+static gint hf_zep_lqi = -1;
+static gint hf_zep_timestamp = -1;
+static gint hf_zep_timestamprel = -1;
+static gint hf_zep_seqno = -1;
+static gint hf_zep_ieee_length = -1;
+static gint hf_zep_abstimestamp = -1;
+static gint hf_zep_reltimestamp = -1;
+static gint hf_zep_diftimestamp = -1;
+static gint hf_zep_refabstime = -1;
 
-static int hf_zep_band = -1;
-static int hf_zep_chanpage = -1;
+static gint hf_zep_band = -1;
+static gint hf_zep_chanpage = -1;
 
 /* Initialize protocol subtrees. */
 static gint ett_zep = -1;
 
 /* Initialize preferences. */
+static const gchar *gPREF_nextdiss = "wpan";
 static guint32  gPREF_zep_udp_port = ZEP_DEFAULT_PORT;
 //static gboolean g_zep_timediff_filtered = TRUE;
 
-#define DEV_TIMESTAMP_TYPE_RELATIVE	0		
+#define DEV_TIMESTAMP_TYPE_RELATIVE	0
 #define DEV_TIMESTAMP_TYPE_ABSOLUTE	1
 
 static gint dev_timestamp_type = DEV_TIMESTAMP_TYPE_RELATIVE;
@@ -241,7 +249,7 @@ ntp_to_nstime(tvbuff_t *tvb, gint offset, nstime_t *nstime)
  *      void
  *---------------------------------------------------------------
  */
-static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
+static int dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
 {
     tvbuff_t            *next_tvb;
     proto_item          *proto_root, *pi;
@@ -259,13 +267,13 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     dissector_handle_t  next_dissector;
 
 	//g_warning("filter = %d, %d, %d, %d, %d",pinfo->fd->flags.visited,pinfo->fd->flags.ref_time,pinfo->fd->flags.marked,pinfo->fd->flags.ignored, pinfo->fd->prev_dis_num);
-	//g_warning("Packet (%d):",pinfo->fd->num); 
+	//g_warning("Packet (%d):",pinfo->fd->num);
 
     /*  Determine whether this is a Q51/IEEE 802.15.4 sniffer packet or not */
     if(strcmp(tvb_get_string_enc(wmem_packet_scope(), tvb, 0, 2, ENC_ASCII), ZEP_PREAMBLE)){
         /*  This is not a Q51/ZigBee sniffer packet */
         call_dissector(data_handle, tvb, pinfo, tree);
-        return;
+        return 0;
     }
 
     memset(&zep_data, 0, sizeof(zep_data)); /* Zero all zep_data fields. */
@@ -284,8 +292,8 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
         ieee_packet_len = (tvb_get_guint8(tvb, ZEP_V1_HEADER_LEN - 1) & ZEP_LENGTH_MASK);
     }
     else if(zep_data.version == 3){
-    
-        /*ZEP v3 native for Open Sniffer*/        
+
+        /*ZEP v3 native for Open Sniffer*/
         zep_data.type = tvb_get_guint8(tvb, 3);
         if (zep_data.type == ZEP_V3_TYPE_ACK) {
             /* ZEP Ack has only the seqno. */
@@ -300,18 +308,18 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
             zep_data.device_id = tvb_get_ntohs(tvb, 5);
             zep_data.lqi_mode = tvb_get_guint8(tvb, 7)?1:0;
             zep_data.lqi = tvb_get_guint8(tvb, 8);
-                       
+
             //Relative timestamp
             zep_data.ntp_time.secs  = tvb_get_ntohl(tvb, 9);
 	          zep_data.ntp_time.nsecs = (int)(tvb_get_ntohl(tvb, 9+4));
-            
+
             zep_data.seqno = tvb_get_ntohl(tvb, 17);
             zep_data.band = tvb_get_guint8(tvb, 21);
             zep_data.chanpage = tvb_get_guint8(tvb, 22);
             ieee_packet_len = (tvb_get_guint8(tvb, ZEP_V3_HEADER_LEN - 1) & ZEP_LENGTH_MASK);
         }
-    
-    
+
+
     }
     else {
         /* At the time of writing, v2 is the latest version of ZEP, assuming
@@ -344,10 +352,10 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     }
 #endif
 
-    if(ieee_packet_len < tvb_length(tvb)-zep_header_len){
+    if(ieee_packet_len < tvb_reported_length(tvb)-zep_header_len){
         /* Packet's length is mis-reported, abort dissection */
         call_dissector(data_handle, tvb, pinfo, tree);
-        return;
+        return 0;
     }
 
     /*  Enter name info protocol field */
@@ -358,7 +366,7 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     if (!((zep_data.version>=2) && (zep_data.type==ZEP_V2_TYPE_ACK))) col_add_fstr(pinfo->cinfo, COL_INFO, "Encapsulated ZigBee Packet [Channel]=%i [Length]=%i", zep_data.channel_id, ieee_packet_len);
     else col_add_fstr(pinfo->cinfo, COL_INFO, "Ack, Sequence Number: %i", zep_data.seqno);
 
-    //--------------------------------  
+    //--------------------------------
 
 	if(zep_data.version == 3){
 		/* Available only in ZEP v3 */
@@ -381,7 +389,7 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 		}
 
 
-		/* only TRUE first time we process this packet*/              
+		/* only TRUE first time we process this packet*/
 		if (!pinfo->fd->flags.visited) {
 			//Dissector not-visited
 
@@ -398,7 +406,7 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 			zep_trans = (zep_transaction_t*)wmem_tree_lookup32(zep_info->pdus, zep_data.device_id);
 			if(zep_trans){
 				//Data exist
-				//g_warning("zep_trans");	
+				//g_warning("zep_trans");
 
 				proto_data->prev_dev_time = zep_trans->prev_dev_time;
 				proto_data->is_first = FALSE;
@@ -406,7 +414,7 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 				//g_warning("prev_seqno packet = %d",zep_trans->prev_seqno);
 
 				//Save to Conversation:Device timestamp, ZEP sequence number
-				zep_trans->prev_dev_time = zep_data.ntp_time;  
+				zep_trans->prev_dev_time = zep_data.ntp_time;
 				zep_trans->prev_seqno = zep_data.seqno;
 
 
@@ -416,12 +424,12 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 				//g_warning("no-zep_trans");
 				//g_warning("First packet");
 				//Create, fill up and save data
-				zep_trans = wmem_new(wmem_file_scope(), zep_transaction_t);   
+				zep_trans = wmem_new(wmem_file_scope(), zep_transaction_t);
 
 				//Save to Conversation: absolute time,Device timestamp, ZEP sequence number
 				zep_trans->ref_time = pinfo->fd->abs_ts;
 				zep_trans->first_dev_time = zep_data.ntp_time;
-				zep_trans->prev_dev_time = zep_data.ntp_time;  
+				zep_trans->prev_dev_time = zep_data.ntp_time;
 				zep_trans->prev_seqno = zep_data.seqno;
 
 				proto_data->prev_dev_time = zep_trans->prev_dev_time;
@@ -430,17 +438,17 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 				//Save data to conversation
 				wmem_tree_insert32(zep_info->pdus, zep_data.device_id, (void *)zep_trans);
 			}
-			  
+
 			proto_data->ref_time = zep_trans->ref_time;
 			proto_data->first_dev_time = zep_trans->first_dev_time;
 
 			//Saved local data
-			p_add_proto_data(wmem_file_scope(),pinfo, proto_zep,zep_data.device_id, proto_data);  
+			p_add_proto_data(wmem_file_scope(),pinfo, proto_zep,zep_data.device_id, proto_data);
 
 		}else{
 			//Dissector visited
 			//g_warning("visited");
-			// get saved data from current dissector              
+			// get saved data from current dissector
 			proto_data = (zep_proto_data_t *)p_get_proto_data(wmem_file_scope(),pinfo, proto_zep,zep_data.device_id);
 
 			if(proto_data == NULL){
@@ -457,11 +465,11 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 		//g_warning("display = %d",(gint)pinfo->fd->flags.passed_dfilter);
 		//g_warning("ignored = %d",(gint)pinfo->fd->flags.ignored);
 		//g_warning("dependent_of_displayed = %d",(gint)pinfo->fd->flags.dependent_of_displayed);
-		
-      }               
-                      
-    
-        //-------------------------------- 
+
+      }
+
+
+        //--------------------------------
 
     if(tree){
         /*  Create subtree for the ZEP Header */
@@ -474,7 +482,7 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
         zep_tree = proto_item_add_subtree(proto_root, ett_zep);
 
         /*  Display the information in the subtree */
-        proto_tree_add_text(zep_tree, tvb, 0, 2, "Protocol ID String: EX");
+        proto_tree_add_item(zep_tree, hf_zep_id_string, tvb, 0, 2, ENC_ASCII|ENC_NA);
         if (zep_data.version==1) {
             proto_tree_add_uint(zep_tree, hf_zep_version, tvb, 2, 1, zep_data.version);
             proto_tree_add_uint(zep_tree, hf_zep_channel_id, tvb, 3, 1, zep_data.channel_id);
@@ -483,15 +491,15 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
             if(!(zep_data.lqi_mode)){
                 proto_tree_add_uint(zep_tree, hf_zep_lqi, tvb, 7, 1, zep_data.lqi);
             }
-            proto_tree_add_text(zep_tree, tvb, 7+((zep_data.lqi_mode)?0:1), 7+((zep_data.lqi_mode)?1:0), "Reserved Fields");
+            proto_tree_add_subtree(zep_tree, tvb, 7+((zep_data.lqi_mode)?0:1), 7+((zep_data.lqi_mode)?1:0), ett_zep, NULL, "Reserved Fields");
         }else if (zep_data.version==3){
-        
+
             /*
             *
-            * ZEP version 3 
+            * ZEP version 3
             *
-            */                                                            
-        
+            */
+
             proto_tree_add_uint(zep_tree, hf_zep_version, tvb, 2, 1, zep_data.version);
             if (zep_data.type == ZEP_V2_TYPE_ACK) {
                 proto_tree_add_uint_format(zep_tree, hf_zep_type, tvb, 3, 1, zep_data.type, "Type: %i (Ack)", ZEP_V2_TYPE_ACK);
@@ -521,14 +529,14 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 
 				//
 				//Compute absolute timestamp
-                //    
+                //
 
 				//Relative time = Device Time - First Dev Time
 				_nstime_delta(&temp_time,&zep_data.ntp_time,&proto_data->first_dev_time);
-				proto_tree_add_time(zep_tree, hf_zep_reltimestamp, tvb, 9, 8, &(temp_time));              
+				proto_tree_add_time(zep_tree, hf_zep_reltimestamp, tvb, 9, 8, &(temp_time));
 
 				//Absolute Time = Ref Absolute Time + Relative Time
-				if(dev_timestamp_type == DEV_TIMESTAMP_TYPE_RELATIVE){ 
+				if(dev_timestamp_type == DEV_TIMESTAMP_TYPE_RELATIVE){
 					_nstime_sum(&temp_time,&proto_data->ref_time,&temp_time);
 					proto_tree_add_time(zep_tree, hf_zep_abstimestamp, tvb, 9, 8, &(temp_time));
 				}
@@ -541,29 +549,29 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
                   pi = proto_tree_add_time(zep_tree, hf_zep_diftimestamp, tvb, 0, 0, &(temp_time));
                   proto_item_append_text(pi, " (First packet)");
                 }else{
-                
+
                   _nstime_delta(&temp_time,&zep_data.ntp_time,&proto_data->prev_dev_time);
                   proto_tree_add_time(zep_tree, hf_zep_diftimestamp, tvb, 0, 0, &(temp_time));
-                
+
                 }
-                
-                  
-                //----------------------------------------------------                                
+
+
+                //----------------------------------------------------
                 proto_tree_add_uint(zep_tree,hf_zep_seqno, tvb, 17, 4, zep_data.seqno);
-                
+
                 proto_tree_add_uint(zep_tree, hf_zep_band, tvb, 21, 1, zep_data.band);
-                
-              
+
+
                 if(zep_data.chanpage == 255){
                   proto_tree_add_uint_format_value(zep_tree, hf_zep_chanpage, tvb, 22,1, zep_data.chanpage,"Not Defined (%d)",zep_data.chanpage);
                 }else{
-                  proto_tree_add_uint(zep_tree, hf_zep_chanpage, tvb, 22, 1, zep_data.chanpage);                
+                  proto_tree_add_uint(zep_tree, hf_zep_chanpage, tvb, 22, 1, zep_data.chanpage);
                 }
-      
-            }     
-        
-        
-        } 
+
+            }
+
+
+        }
         else {
             proto_tree_add_uint(zep_tree, hf_zep_version, tvb, 2, 1, zep_data.version);
             if (zep_data.type == ZEP_V2_TYPE_ACK) {
@@ -586,15 +594,9 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
         if (!((zep_data.version==2) && (zep_data.type==ZEP_V2_TYPE_ACK))) proto_tree_add_uint_format_value(zep_tree, hf_zep_ieee_length, tvb, zep_header_len - 1, 1, ieee_packet_len, "%i %s", ieee_packet_len, (ieee_packet_len==1)?"Byte":"Bytes");
     }
 
+
     /* Determine which dissector to call next. */
-    if (zep_data.lqi_mode) {
-        /* CRC present, use standard IEEE dissector. */
-        next_dissector = ieee802154_handle;
-    }
-    else {
-        /* ChipCon compliant FCS present. */
-        next_dissector = ieee802154_ccfcs_handle;
-    }
+    next_dissector = find_dissector(gPREF_nextdiss);
     if (!next_dissector) {
         /* IEEE 802.15.4 dissectors couldn't be found. */
         next_dissector = data_handle;
@@ -605,6 +607,24 @@ static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
         next_tvb = tvb_new_subset_length(tvb, zep_header_len, ieee_packet_len);
         call_dissector(next_dissector, next_tvb, pinfo, tree);
     }
+
+    if (zep_data.version == 3) {
+        if (zep_data.type == ZEP_V3_TYPE_DATA) {
+            return ZEP_V3_HEADER_LEN;
+        } else if (zep_data.type == ZEP_V3_TYPE_ACK) {
+            return ZEP_V3_ACK_LEN;
+        }
+    } else if (zep_data.version == 2) {
+        if (zep_data.type == ZEP_V2_TYPE_DATA) {
+            return ZEP_V2_HEADER_LEN;
+        } else if (zep_data.type == ZEP_V2_TYPE_ACK) {
+            return ZEP_V2_ACK_LEN;
+        }
+    } else if (zep_data.version == 1) {
+        return ZEP_V1_HEADER_LEN;
+    }
+
+    return 0;
 } /* dissect_ieee802_15_4 */
 
 /*FUNCTION:------------------------------------------------------
@@ -623,6 +643,9 @@ void proto_register_zep(void)
     module_t *zep_module;
 
     static hf_register_info hf[] = {
+        { &hf_zep_id_string,
+        { "Protocol ID String",           "zepv3.id_string", FT_STRING, BASE_NONE, NULL, 0x0,
+            "The Protocol Identification string.", HFILL }},
         { &hf_zep_version,
         { "Protocol Version",           "zepv3.version", FT_UINT8, BASE_DEC, NULL, 0x0,
             "The version of the sniffer.", HFILL }},
@@ -658,15 +681,15 @@ void proto_register_zep(void)
         { &hf_zep_abstimestamp,
         { "Absolute Timestamp",                  "zepv3.abstime", FT_ABSOLUTE_TIME, ABSOLUTE_TIME_LOCAL, NULL, 0x0,
           "Timestamp related to Wireshark. Based on Ethernet timestamp and Timestamp", HFILL }},
-            
+
         { &hf_zep_reltimestamp,
         { "Relative Timestamp",                  "zepv3.reltime", FT_RELATIVE_TIME, BASE_NONE, NULL, 0x0,
-          NULL, HFILL }},            
-             
+          NULL, HFILL }},
+
         { &hf_zep_diftimestamp,
         { "Differential Timestamp",                  "zepv3.diftime", FT_RELATIVE_TIME, BASE_NONE, NULL, 0x0,
-            "Differential timestamp between current and previous packet.", HFILL }},   
-            
+            "Differential timestamp between current and previous packet.", HFILL }},
+
          { &hf_zep_refabstime,
         { "Reference Absolute Timestamp",         "zepv3.refatime", FT_ABSOLUTE_TIME, ABSOLUTE_TIME_LOCAL, NULL, 0x0,
             NULL, HFILL }},
@@ -685,8 +708,8 @@ void proto_register_zep(void)
 
         { &hf_zep_chanpage,
         { "Channel page",            "zepv3.chanpage", FT_UINT8, BASE_DEC, NULL, 0x0,
-            "Channel page.", HFILL }},            
-                
+            "Channel page.", HFILL }},
+
 	};
 
     static gint *ett[] = {
@@ -695,6 +718,17 @@ void proto_register_zep(void)
 
     /*  Register protocol name and description. */
     proto_zep = proto_register_protocol("ZigBee Encapsulation Protocol version (v3)", "ZEPv3", "zepv3");
+/*
+
+    /Users/mgenti/Downloads/wireshark-2.2.2/plugins/zepv3/packet-zepv3.c:252:84: warning: unused parameter 'data' [-Wunused-parameter]
+    static void dissect_zep(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
+    ^
+    /Users/mgenti/Downloads/wireshark-2.2.2/plugins/zepv3/packet-zepv3.c:728:46: warning: incompatible pointer types passing 'void (tvbuff_t *, packet_info *, proto_tree *, void *)' (aka 'void (struct tvbuff *, struct _packet_info *, struct _proto_node *, void *)') to parameter of type 'dissector_t' (aka 'int (*)(struct tvbuff *, struct _packet_info *, struct _proto_node *, void *)') [-Wincompatible-pointer-types]
+    zep_handle = register_dissector("zepv3", dissect_zep, proto_zep);
+    ^~~~~~~~~~~
+     /Users/mgenti/Downloads/wireshark-2.2.2/epan/packet.h:490:83: note: passing argument to parameter 'dissector' here
+    WS_DLL_PUBLIC dissector_handle_t register_dissector(const char *name, dissector_t dissector, const int proto);
+*/
 
     /*  Register header fields and subtrees. */
     proto_register_field_array(proto_zep, hf, array_length(hf));
@@ -704,6 +738,10 @@ void proto_register_zep(void)
     zep_module = prefs_register_protocol(proto_zep, proto_reg_handoff_zep);
 
     /*  Register preferences */
+	prefs_register_string_preference(zep_module, "nextdiss", "Set next dissector as Link protocol",
+                                     "Set next dissector with filter name",
+                                     &gPREF_nextdiss);
+
     prefs_register_uint_preference(zep_module, "udp.port", "ZEP UDP port",
                  "Set the port for ZEP Protocol\n"
                  "Default port is 17754",

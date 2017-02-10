@@ -1,7 +1,5 @@
 # CMakeLists.txt
 #
-# $Id: CMakeLists.txt 43536 2012-06-28 22:56:06Z darkjames $
-#
 # Wireshark - Network traffic analyzer
 # By Gerald Combs <gerald@wireshark.org>
 # Copyright 1998 Gerald Combs
@@ -21,6 +19,11 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
+include(WiresharkPlugin)
+
+# Plugin name and version info (major minor micro extra)
+set_module_info(zepv3 0 0 4 0)
+
 set(DISSECTOR_SRC
 	packet-zepv3.c
 )
@@ -34,11 +37,11 @@ set(CLEAN_FILES
 	${PLUGIN_FILES}
 )
 
-if (WERROR)
+if (WERROR_COMMON_FLAGS)
 	set_source_files_properties(
 		${CLEAN_FILES}
 		PROPERTIES
-		COMPILE_FLAGS -Werror
+		COMPILE_FLAGS ${WERROR_COMMON_FLAGS}
 	)
 endif()
 
@@ -49,17 +52,21 @@ register_dissector_files(plugin.c
 	${DISSECTOR_SRC}
 )
 
-add_library(zepv3 ${LINK_MODE_MODULE}
-	${PLUGIN_FILES}
-)
-set_target_properties(zepv3 PROPERTIES PREFIX "")
-set_target_properties(zepv3 PROPERTIES LINK_FLAGS "${WS_LINK_FLAGS}")
-
-target_link_libraries(zepv3 epan)
+add_plugin_library(zepv3)
 
 install(TARGETS zepv3
-	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/@CPACK_PACKAGE_NAME@/plugins/${CPACK_PACKAGE_VERSION} NAMELINK_SKIP
-	RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/@CPACK_PACKAGE_NAME@/plugins/${CPACK_PACKAGE_VERSION}
-	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/@CPACK_PACKAGE_NAME@/plugins/${CPACK_PACKAGE_VERSION}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION} NAMELINK_SKIP
+	RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
 )
 
+file(GLOB DISSECTOR_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
+CHECKAPI(
+	NAME
+	  zepv3
+	SWITCHES
+	  -g abort -g termoutput -build
+	SOURCES
+	  ${DISSECTOR_SRC}
+	  ${DISSECTOR_HEADERS}
+)
